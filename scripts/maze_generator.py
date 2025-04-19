@@ -116,14 +116,14 @@ def path_to_directions(path):
 
 
 def build_chain_of_thought(start, path):
-    """Build chain of thought text based on path."""
     steps = [f"We start at {start}."]
     for (x0, y0), (x1, y1) in zip(path, path[1:]):
         dir_name = path_to_directions([(x0, y0), (x1, y1)])[0]
         steps.append(f"Move {dir_name} to {(x1, y1)}.")
     steps.append(f"Thus we reach the end at {path[-1]}.")
-    steps.append(f"So the path is: {', '.join(path_to_directions(path))}.")
-    return ' '.join(steps)
+    final_dirs = ', '.join(path_to_directions(path))
+    steps.append(f"#### {final_dirs}")
+    return '\n'.join(steps)
 
 
 def format_maze_matrix(maze):
@@ -178,7 +178,16 @@ def convert_to_prompt_completion(input_jsonl,
             start = tuple(data['start'])
             path = [tuple(p) for p in data['path']]
             maze_text = format_maze_matrix(maze)
-            prompt = f"Q: Given the following maze (0=passage,1=wall):\n{maze_text}\nStart: {start}, End: {tuple(data['end'])}. Let's think step by step.\nA:"
+            prompt = (
+                f"Q: Given the following maze (0=passage,1=wall):\n"
+                f"{maze_text}\n"
+                f"Start: {start}, End: {tuple(data['end'])}.\n"
+                "Let's think step by step.\n"
+                "At the end, please output **only** the final path steps in one line, "
+                "prefixed by `#### `, as comma‑separated directions (up/down/left/right).\n"
+                "For example: `#### down, down, right, right, up`.\n"
+                "A:"
+            )
             completion = build_chain_of_thought(start, path)
             samples.append({'prompt': prompt, 'completion': completion})
 
@@ -188,9 +197,14 @@ def convert_to_prompt_completion(input_jsonl,
     val_samples = samples[:n_val]
     train_samples = samples[n_val:]
 
-    # Write to files
-    for name, subset in [('train', train_samples), ('val', val_samples)]:
-        with open(f"{name}.jsonl", 'w') as jf, open(f"{name}.csv", 'w', newline='') as cf:
+    # Write to files using the provided file paths
+    file_paths = {
+        'train': (train_jsonl, train_csv, train_samples),
+        'val': (val_jsonl, val_csv, val_samples)
+    }
+    
+    for name, (jsonl_path, csv_path, subset) in file_paths.items():
+        with open(jsonl_path, 'w') as jf, open(csv_path, 'w', newline='') as cf:
             writer = csv.writer(cf)
             writer.writerow(['prompt', 'completion'])
             for s in subset:
@@ -199,5 +213,17 @@ def convert_to_prompt_completion(input_jsonl,
     print(f"Saved {len(train_samples)} train and {len(val_samples)} val samples to JSONL/CSV.")
 
 if __name__ == '__main__':
-    generate_dataset(num_samples=1000, width=11, height=11)
-    convert_to_prompt_completion('maze_dataset.jsonl', val_ratio=0.2)
+    # Create data directory if it doesn't exist
+    os.makedirs('data', exist_ok=True)
+    
+    # Set output paths to data directory
+    output_jsonl = 'data/maze_dataset.jsonl'
+    image_dir = 'data/maze_images'
+    train_jsonl = 'data/train.jsonl'
+    val_jsonl = 'data/val.jsonl'
+    train_csv = 'data/train.csv'
+    val_csv = 'data/val.csv'
+    
+    generate_dataset(num_samples=1000, width=5, height=5, output_jsonl=output_jsonl, image_dir=image_dir)
+    convert_to_prompt_completion(output_jsonl, train_jsonl=train_jsonl, val_jsonl=val_jsonl, 
+                                train_csv=train_csv, val_csv=val_csv, val_ratio=0.2)

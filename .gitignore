@@ -1,6 +1,12 @@
 # data
 data/
 
+#output
+outputs/
+
+# checkpoints
+checkpoints/
+
 # CONDA ENV
 .CONDA_ENV
 
