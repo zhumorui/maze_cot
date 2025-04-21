@@ -13,8 +13,21 @@ def generate_maze(width, height, seed=None):
         random.seed(seed)
         np.random.seed(seed)
     maze = np.ones((height, width), dtype=int)
-    start = (1, 1)
-    end = (width - 2, height - 2)
+    
+    # Randomly choose start and end positions along the edges
+    possible_positions = []
+    for x in range(1, width-1):
+        possible_positions.extend([(x, 1), (x, height-2)])
+    for y in range(1, height-1):
+        possible_positions.extend([(1, y), (width-2, y)])
+    
+    # Ensure start and end are at least manhattan distance of width/2 apart
+    while True:
+        start = random.choice(possible_positions)
+        end = random.choice(possible_positions)
+        if abs(start[0] - end[0]) + abs(start[1] - end[1]) >= width/2:
+            break
+    
     maze[start[1], start[0]] = 0
     maze[end[1], end[0]] = 0
     dirs = [(0, 2), (2, 0), (0, -2), (-2, 0)]
@@ -37,7 +50,9 @@ def generate_maze(width, height, seed=None):
             stack.pop()
     path = find_path(maze, start, end)
     if not path:
-        return generate_maze(width, height, seed)
+        # Use a new deterministic seed for retry
+        new_seed = seed + 10000 if seed is not None else None
+        return generate_maze(width, height, new_seed)
     return maze, start, end, path
 
 def find_path(maze, start, end):
@@ -118,8 +133,22 @@ def generate_samples(num_samples, width, height, val_ratio, output_dir):
     samples = []
     vis_dir = os.path.join(output_dir, 'vis')
     os.makedirs(vis_dir, exist_ok=True)
-    for seed in range(num_samples):
+    
+    # Keep track of unique mazes to avoid duplicates
+    unique_mazes = set()
+    unique_samples = []
+    
+    # Try to generate num_samples * 2 mazes to ensure we have enough unique ones
+    for seed in range(num_samples * 2):
         maze, start, end, path = generate_maze(width, height, seed)
+        # Convert maze to tuple for hashing
+        maze_tuple = tuple(map(tuple, maze))
+        
+        # Skip if we've seen this maze before
+        if maze_tuple in unique_mazes:
+            continue
+            
+        unique_mazes.add(maze_tuple)
         maze_text = format_maze_matrix(maze)
         question = (
             f"Given the following maze (0=passage,1=wall):\n{maze_text}\n"
@@ -133,7 +162,7 @@ def generate_samples(num_samples, width, height, val_ratio, output_dir):
         gt_dirs = ', '.join(path_to_directions(path))
         directions = extract_answer_directions(completion)
         pred_path = directions_to_path(start, directions) if directions else []
-        img_path = os.path.join(vis_dir, f"maze_{seed}.png")
+        img_path = os.path.join(vis_dir, f"maze_{len(unique_samples)}.png")
         if pred_path:
             visualize_and_save(maze, pred_path, start, end, img_path)
         entry = {
@@ -143,19 +172,29 @@ def generate_samples(num_samples, width, height, val_ratio, output_dir):
             'reward_model': {'ground_truth': gt_dirs, 'style': 'rule'},
             'extra_info': {
                 'answer': completion,
-                'index': seed,
+                'index': len(unique_samples),
                 'question': question,
                 'split': None,
                 'vis_path': img_path
             }
         }
-        samples.append(entry)
-    random.shuffle(samples)
-    n_val = int(len(samples) * val_ratio)
-    for i, s in enumerate(samples):
+        unique_samples.append(entry)
+        
+        # If we have enough unique samples, stop generating
+        if len(unique_samples) >= num_samples:
+            break
+    
+    # Print actual number of unique mazes generated
+    print(f"Generated {len(unique_samples)} unique mazes out of {seed + 1} attempts")
+    
+    # Shuffle and split the unique samples
+    random.shuffle(unique_samples)
+    n_val = int(len(unique_samples) * val_ratio)
+    for i, s in enumerate(unique_samples):
         s['extra_info']['split'] = 'test' if i < n_val else 'train'
-    train = [s for s in samples if s['extra_info']['split']=='train']
-    val = [s for s in samples if s['extra_info']['split']=='test']
+    
+    train = [s for s in unique_samples if s['extra_info']['split']=='train']
+    val = [s for s in unique_samples if s['extra_info']['split']=='test']
     return train, val
 
 def main():
